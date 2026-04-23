@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  moodle:
+    build: .
+    container_name: moodle_app
+    ports:
+      - "8080:80"
+    environment:
+      # Optional apache env vars if needed
+      - APACHE_RUN_USER=www-data
+      - APACHE_RUN_GROUP=www-data
+      # PHP Environment variables
+      - PHP_MEMORY_LIMIT=512M
+      - PHP_MAX_EXECUTION_TIME=180
+      - PHP_MAX_INPUT_VARS=5000
+      - PHP_POST_MAX_SIZE=100M
+      - PHP_UPLOAD_MAX_FILESIZE=100M
+      # Dinamikusan felvett tetszőleges php.ini beállítás példa:
+      # A PHP_INI_ előtag utáni rész bekerül a konfigba. A dupla aláhúzás (__) pontra (.) cserélődik.
+      # Például: PHP_INI_session__gc_maxlifetime=1440 -> session.gc_maxlifetime = 1440
+      - PHP_INI_display_errors=Off
+      - PHP_INI_session__gc_maxlifetime=1440
+      - PHP_FPM_MAX_CHILDREN=50
+      - PHP_FPM_START_SERVERS=5
+      # Apache MPM Event variables
+      - APACHE_MAX_REQUEST_WORKERS=150
+      - APACHE_THREADS_PER_CHILD=25
+    volumes:
+      # Ha módosítani is akarod a forráskódot docker-en kívül, 
+      # ide kivezetheted a /var/www/html -t, de a Dockerfile már tartalmazza a forrást.
+      - moodle_data:/var/www/moodledata
+      - ./config.php:/var/www/html/config.php
+    depends_on:
+      - pgbouncer
+    networks:
+      - moodle_network
+
+  db:
+    image: postgres:16
+    container_name: moodle_db
+    environment:
+      POSTGRES_USER: moodle
+      POSTGRES_PASSWORD: moodle_password
+      POSTGRES_DB: moodle
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - moodle_network
+
+  pgbouncer:
+    image: bitnamilegacy/pgbouncer:latest
+    container_name: moodle_pgbouncer
+    environment:
+      - POSTGRESQL_HOST=moodle_db
+      - POSTGRESQL_PORT=5432
+      - PGBOUNCER_DATABASE=moodle
+      - POSTGRESQL_USERNAME=moodle
+      - POSTGRESQL_PASSWORD=moodle_password
+      - PGBOUNCER_POOL_MODE=session
+      - PGBOUNCER_MAX_CLIENT_CONN=100
+      - PGBOUNCER_DEFAULT_POOL_SIZE=20
+      # Auth type can be md5 or scram-sha-256 (postgres 14+ default is scram, bitnami supports auto)
+      - PGBOUNCER_AUTH_TYPE=scram-sha-256
+      - PGBOUNCER_PORT=5432
+    ports:
+      - "6432:5432" # Host gépről (kívülről) a 6432-es porton éred el, hogy ne akadjon össze a localhost Postgresével
+    depends_on:
+      - db
+    networks:
+      - moodle_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: moodle_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - moodle_network
+
+volumes:
+  moodle_data:
+  db_data:
+  redis_data:
+
+
+networks:
+  moodle_network:

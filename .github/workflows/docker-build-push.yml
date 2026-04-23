@@ -1,0 +1,54 @@
+name: Build and Push Moodle Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*' # Például: v1.0.0, v4.5.10
+
+jobs:
+  build_and_push:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        # Szükséges az ARM64 és AMD64 platformfüggetlen építéshez (multi-arch)
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        # Docker Buildx a tényleges multi-arch builderek biztosítására
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: cnwzrt
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          # Ezeket a Secret-eket be kell állítanod a GitHub repository Settings -> Secrets -> Actions menüben.
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: cnwzrt/pocmoodle
+          # Így automatikusan kezeli a verziókat, pl. v1.0 esetén felteszi a: 1.0, latest stb. tageket is.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          # A kért két fő architektúra (Standard gépek és pl. Apple Silicon vagy AWS Graviton szerverek)
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Gyorsítótárazás a GitHub Actions natív gyorsítótárába a későbbi buildek felgyorsításáért
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
