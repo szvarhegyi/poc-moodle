@@ -102,3 +102,15 @@ $CFG->session_handler_class = '\core\session\redis';
 $CFG->session_redis_host = 'moodle_redis';
 $CFG->session_redis_port = 6379;
 ```
+
+## 5. Ütemezett Feladatok (Cron / CLI) és Kubernetes Tervezés
+
+A Moodle tökéletes működéséhez elengedhetetlen a háttérfolyamatok (Moodle Cron és Adhoc taskok) futtatása. A Docker bevált gyakorlatai (és különösen a magas rendelkezésre állású Kubernetes környezetek) szerint a háttérfolyamatokat érdemes a fő webes kiszolgálótól (Apache) **különálló konténerbe (vagy pod-ba)** szervezni.
+
+A `docker-compose.yml` fájlban példaként szerepel egy `moodle-cli` nevű szolgáltatás, ami ugyanabból a képfájlból (image) épül fel, azonban a webszerver helyett egy végtelenített ciklusban futtatja a Moodle beépített cron scriptjét, biztosítva az aszinkron feladatok villámgyors futását:
+`php admin/cli/cron.php --keep-alive=300`
+
+**Példa Kubernetes (K8s) tervezéshez:**
+Éles Kubernetes környezetben az architektúrát így érdemes kialakítani a példa alapján:
+1. **Moodle Web Server:** Egy standard `Deployment` az image-ből, amit nyugodtan horizontálisan skálázhatsz (pl. HPA segítségével akár 10 replikáig) az aktuális CPU/Memory load alapján.
+2. **Moodle CLI Worker:** Rendszerint _egy darab_ dedikált, kisebb erőforrásokkal rendelkező (pl. alacsonyabb CPU limit) `Deployment` replikaként vagy specifikus Moodle Worker-ként fut, amely kizárólag a Cron folyamatot tartja életben. Így garantáltan nem futnak egymással összeütköző cron jobok, és a háttérfolyamatok terhelése nem okoz lassulást a diákok számára a webes felületen. Vagy használhatsz natív K8s `CronJob`-ot perces ütemezéssel.

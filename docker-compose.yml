@@ -36,6 +36,42 @@ services:
     networks:
       - moodle_network
 
+  moodle-cli:
+    build: .
+    command: >
+      sh -c "while true; do
+        php admin/cli/cron.php --keep-alive=300
+        sleep 60
+      done"
+    environment:
+      # Optional apache env vars if needed
+      - APACHE_RUN_USER=www-data
+      - APACHE_RUN_GROUP=www-data
+      # PHP Environment variables
+      - PHP_MEMORY_LIMIT=512M
+      - PHP_MAX_EXECUTION_TIME=180
+      - PHP_MAX_INPUT_VARS=5000
+      - PHP_POST_MAX_SIZE=100M
+      - PHP_UPLOAD_MAX_FILESIZE=100M
+      # Dinamikusan felvett tetszőleges php.ini beállítás példa:
+      # A PHP_INI_ előtag utáni rész bekerül a konfigba. A dupla aláhúzás (__) pontra (.) cserélődik.
+      # Például: PHP_INI_session__gc_maxlifetime=1440 -> session.gc_maxlifetime = 1440
+      - PHP_INI_display_errors=Off
+      - PHP_INI_session__gc_maxlifetime=1440
+      - PHP_FPM_MAX_CHILDREN=50
+      - PHP_FPM_START_SERVERS=5
+      # Apache MPM Event variables
+      - APACHE_MAX_REQUEST_WORKERS=150
+      - APACHE_THREADS_PER_CHILD=25
+    volumes:
+      # Ha módosítani is akarod a forráskódot docker-en kívül, 
+      # ide kivezetheted a /var/www/html -t, de a Dockerfile már tartalmazza a forrást.
+      - moodle_data:/var/www/moodledata
+      - ./config.php:/var/www/html/config.php
+    depends_on:
+      - pgbouncer
+    networks:
+      - moodle_network
   db:
     image: postgres:16
     container_name: moodle_db
