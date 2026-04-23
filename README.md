@@ -114,3 +114,230 @@ A `docker-compose.yml` fájlban példaként szerepel egy `moodle-cli` nevű szol
 Éles Kubernetes környezetben az architektúrát így érdemes kialakítani a példa alapján:
 1. **Moodle Web Server:** Egy standard `Deployment` az image-ből, amit nyugodtan horizontálisan skálázhatsz (pl. HPA segítségével akár 10 replikáig) az aktuális CPU/Memory load alapján.
 2. **Moodle CLI Worker:** Rendszerint _egy darab_ dedikált, kisebb erőforrásokkal rendelkező (pl. alacsonyabb CPU limit) `Deployment` replikaként vagy specifikus Moodle Worker-ként fut, amely kizárólag a Cron folyamatot tartja életben. Így garantáltan nem futnak egymással összeütköző cron jobok, és a háttérfolyamatok terhelése nem okoz lassulást a diákok számára a webes felületen. Vagy használhatsz natív K8s `CronJob`-ot perces ütemezéssel.
+
+## 6. Horizontális skálázás Kubernetes (K8s) környezetben
+
+Ahhoz, hogy a webes kiszolgálót (app server) felhős infrastruktúrán dinamikusan, terhelés alapján (HPA - Horizontal Pod Autoscaler) lehessen skálázni több replikára (például vizsgaidőszakban 10-20+ podra), az alábbi kulcsfontosságú architekturális elveket *kell* betartani a fürt kialakításakor:
+
+1. **Osztott Fájlrendszer (Shared Storage - RWX):**
+   A Moodle-nek *kötelezően* szüksége van egy közös `moodledata` állománytérre, amit minden újonnan felpörgő app pod egyidejűleg elér. Ezt a tárolót Kubernetes-ben `ReadWriteMany` (RWX) hozzáférési móddal kell beállítani és felcsatolni (Ilyen technológia pl. az AWS EFS, az Azure Files, vagy egy on-prem NFS szerver). Az alkalmazás konkrét kódjának viszont célszerű továbbra is a konténerbe sütve maradnia az optimális PHP betöltési (opcache) sebesség miatt.
+
+2. **Redis az Ülésekhez (Sessions) és a Gyorsítótárhoz (MUC):**
+   Amikor 5 podod fut, és a felhasználó kéréseit egy Load Balancer (Ingress) osztja el közöttük, a helyi pod lemezen futó sessions kikényszerítetten kijelentkezést fog okozni a következő navigáláskor. **Kötelező** a `config.php`-ban egy fürtözhető vagy egy dedikált központi Redis kiszolgálót beállítani "Session handler"-ként és alkalmazás szintű cache (MUC) céljára. *(Ezt a projektben lévő redis service már modellezi is számodra)*.
+
+3. **PgBouncer és Adatbázis Kapcsolatok (Connection Pool Limitek):**
+   Képzeld el, hogy a HPA felhúz 10 Moodle pod-ot. Ha minden pod-ban 50 a `PHP_FPM_MAX_CHILDREN`, az hirtelen csúcsidőben `10 * 50 = 500` nyitott tranzakciót és adatbázis TCP kapcsolatot jelenthet. A sima PostgreSQL kapcsolatkezelése ilyen terheléstől azonnal összeroppan. 
+   Ezért került ebbe a dizájnba a **PgBouncer**! A horizontális skálázódáskor a PgBouncer-nek szánt `PGBOUNCER_MAX_CLIENT_CONN` értékét megemelheted akár több ezerre is (ennyi kérést fogad be szimultán a webről), a `PGBOUNCER_DEFAULT_POOL_SIZE` értékét pedig a tényleges PostgreSQL szervered teljesítményéhez lőheted be (például 100-as értékre). Így a Moodle biztonságosan, akadás (és Database Exceptionök) nélkül tud skálázódni a háttérben.
+
+4. **Stateless Web App (Állapotmentesség):**
+   Törekedj arra, hogy a webre mutató Moodle konténereid önmagukban teljesen állapotmentesek legyenek. Minden naplózott tartalom vagy naplófájl a stdout/stderr-re (Docker/K8s beépített logolására) menjen. Ebben az elkészített környezetben a PHP-FPM `catch_workers_output` configunk gondoskodik a hibák transzparens K8s konzolra küldéséről, így hiba esetén semmit nem nyel el a helyi virtuális lemez.
+
+### Példa: Kubernetes Deployment (Web & CLI)
+
+A lenti YAML fájlok bemutatják, hogyan fordíthatjuk le a `docker-compose.yml`-t valódi K8s specifikációra (Deployment), fizikailag is szétválasztva a terhelést.
+
+```yaml
+# 0. ConfigMap a Moodle konfiguráció (config.php) számára
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: moodle-config
+data:
+  config.php: |
+    <?php
+    unset($CFG);
+    global $CFG;
+    $CFG = new stdClass();
+    $CFG->dbtype    = 'pgsql';
+    $CFG->dblibrary = 'native';
+    $CFG->dbhost    = 'moodle-pgbouncer-service'; # A PgBouncer K8s Service neve
+    $CFG->dbname    = 'moodle';
+    $CFG->dbuser    = 'moodle';
+    $CFG->dbpass    = 'moodle_password';
+    $CFG->prefix    = 'mdl_';
+    $CFG->dboptions = array(
+        'dbpersist' => 0,
+        'dbport' => '5432',
+        'dbsocket' => '',
+    );
+    $CFG->wwwroot   = 'https://moodle.sajat-domained.com';
+    $CFG->dataroot  = '/var/www/moodledata';
+    $CFG->admin     = 'admin';
+    # Redis Session
+    $CFG->session_handler_class = '\core\session\redis';
+    $CFG->session_redis_host = 'moodle-redis-service'; # A Redis K8s Service neve
+    require_once(__DIR__ . '/lib/setup.php');
+
+---
+# 1. A horizontálisan skálázható (HPA) Web Server Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: moodle-web
+spec:
+  replicas: 3 # Ideális esetben HPA vezérli 3-20 között
+  selector:
+    matchLabels:
+      app: moodle
+      component: web
+  template:
+    metadata:
+      labels:
+        app: moodle
+        component: web
+    spec:
+      containers:
+      - name: moodle-web
+        image: cnwzrt/pocmoodle:latest
+        ports:
+        - containerPort: 80
+        env:
+        - name: PHP_MEMORY_LIMIT
+          value: "512M"
+        - name: PHP_FPM_MAX_CHILDREN
+          value: "50"
+        - name: APACHE_MAX_REQUEST_WORKERS
+          value: "150"
+        volumeMounts:
+        - name: moodledata-storage
+          mountPath: /var/www/moodledata
+        - name: config-volume
+          mountPath: /var/www/html/config.php
+          subPath: config.php
+      volumes:
+      - name: moodledata-storage
+        persistentVolumeClaim:
+          claimName: moodle-rwx-pvc # Amazon EFS / Azure Files alapú (ReadWriteMany) claim
+      - name: config-volume
+        configMap:
+          name: moodle-config
+
+---
+# 2. A Moodle CLI Worker - Kizárólag a Cron scriptekért felel
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: moodle-cli
+spec:
+  replicas: 1 # KÖTELEZŐ: Szigorúan 1 replika a duplikált cron futások elkerülése miatt!
+  selector:
+    matchLabels:
+      app: moodle
+      component: cli
+  template:
+    metadata:
+      labels:
+        app: moodle
+        component: cli
+    spec:
+      containers:
+      - name: moodle-cron
+        image: cnwzrt/pocmoodle:latest
+        command:
+          - sh
+          - "-c"
+          - |
+            while true; do
+              php admin/cli/cron.php --keep-alive=300
+              sleep 60
+            done
+        env:
+        - name: PHP_MEMORY_LIMIT
+          value: "1024M" # A CLI script gyakran több memóriát igényel, mint egy átlagos webszál
+        volumeMounts:
+        - name: moodledata-storage
+          mountPath: /var/www/moodledata
+        - name: config-volume
+          mountPath: /var/www/html/config.php
+          subPath: config.php
+      volumes:
+      - name: moodledata-storage
+        persistentVolumeClaim:
+          claimName: moodle-rwx-pvc
+      - name: config-volume
+        configMap:
+          name: moodle-config
+
+---
+# 3. PgBouncer Deployment és Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: moodle-pgbouncer
+spec:
+  replicas: 1 # PgBouncer önmagában ezer-tízezer kapcsolatot bír, általában elég 1-2 replika
+  selector:
+    matchLabels:
+      app: moodle
+      component: pgbouncer
+  template:
+    metadata:
+      labels:
+        app: moodle
+        component: pgbouncer
+    spec:
+      containers:
+      - name: pgbouncer
+        image: bitnami/pgbouncer:latest
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRESQL_HOST
+          value: "a-valodi-k8s-postgres-szolgaltatasod" # Erre a backendre fog proxy-zni!
+        - name: PGBOUNCER_PORT
+          value: "5432"
+        - name: PGBOUNCER_DATABASE
+          value: "moodle"
+        - name: POSTGRESQL_USERNAME
+          value: "moodle"
+        - name: POSTGRESQL_PASSWORD
+          value: "moodle_password"
+        - name: PGBOUNCER_POOL_MODE
+          value: "transaction"
+        - name: PGBOUNCER_MAX_CLIENT_CONN
+          value: "2000"
+        - name: PGBOUNCER_DEFAULT_POOL_SIZE
+          value: "100"
+        - name: PGBOUNCER_AUTH_TYPE
+          value: "scram-sha-256"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: moodle-pgbouncer-service
+spec:
+  selector:
+    app: moodle
+    component: pgbouncer
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+
+---
+# 4. Horizontal Pod Autoscaler (HPA) a webes kiszolgálóhoz
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: moodle-web-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: moodle-web
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75 # Ha az átlagos CPU meghaladja a 75%-ot, felhúz egy újabb Moodle podot.
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80 # Ha a memória töltődik túl, arra is reagál.
+```
