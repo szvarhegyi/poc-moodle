@@ -1,0 +1,50 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: moodle
+      component: database
+  template:
+    metadata:
+      labels:
+        app: moodle
+        component: database
+    spec:
+      containers:
+      - name: postgres
+        image: "{{ .Values.postgres.image }}"
+        env:
+        - name: POSTGRES_USER
+          value: "{{ .Values.postgres.user }}"
+        - name: POSTGRES_PASSWORD
+          value: "{{ .Values.postgres.password }}"
+        - name: POSTGRES_DB
+          value: "{{ .Values.postgres.dbName }}"
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - mountPath: /var/lib/postgresql/data
+          name: db-data
+      volumes:
+      - name: db-data
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-db-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-db
+spec:
+  selector:
+    app: moodle
+    component: database
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+{{- end }}

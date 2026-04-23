@@ -1,0 +1,59 @@
+moodle:
+  image: "cnwzrt/pocmoodle:latest"
+  # Web replica szam
+  replicas: 1
+  domain: "localhost:30080" # Ennek meg kell egyeznie azzal amin a böngeszőből eléred, pl. localhost:8080 (ha NodePort-ot használsz helyileg)
+  env:
+    phpMemoryLimit: "512M"
+    phpFpmMaxChildren: "50"
+    apacheMaxRequestWorkers: "150"
+  service:
+    type: NodePort
+    port: 80
+    nodePort: 30080 # Docker Desktopon localhost:30080 néven lesz elérhető ha a port forwarding megy
+  
+  # A HPA-hoz elengedhetetlen, hogy a konténernek legyenek definált erőforrás-igényei
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1024Mi"
+      
+  # Kubernetes HPA beállítások a web szerverhez
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 80
+
+postgres:
+  enabled: true
+  image: "postgres:16"
+  dbName: "moodle"
+  user: "moodle"
+  password: "moodle_password"
+
+pgbouncer:
+  image: "bitnamilegacy/pgbouncer:latest"
+  poolMode: "session"
+  maxClientConn: "100"
+  defaultPoolSize: "20"
+  authType: "scram-sha-256"
+
+redis:
+  enabled: true
+  image: "redis:7-alpine"
+
+persistence:
+  # A moodledata részére
+  moodleData:
+    size: 2Gi
+  # Postgres számára
+  database:
+    size: 1Gi
+  # Redis számára
+  redis:
+    size: 100Mi

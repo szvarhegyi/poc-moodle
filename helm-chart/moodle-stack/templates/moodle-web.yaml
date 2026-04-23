@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-web
+spec:
+  replicas: {{ .Values.moodle.replicas }}
+  selector:
+    matchLabels:
+      app: moodle
+      component: web
+  template:
+    metadata:
+      labels:
+        app: moodle
+        component: web
+    spec:
+      containers:
+      - name: moodle-app
+        image: "{{ .Values.moodle.image }}"
+        ports:
+        - containerPort: 80
+        env:
+        - name: PHP_MEMORY_LIMIT
+          value: "{{ .Values.moodle.env.phpMemoryLimit }}"
+        - name: PHP_FPM_MAX_CHILDREN
+          value: "{{ .Values.moodle.env.phpFpmMaxChildren }}"
+        - name: APACHE_MAX_REQUEST_WORKERS
+          value: "{{ .Values.moodle.env.apacheMaxRequestWorkers }}"
+        volumeMounts:
+        - name: moodledata-storage
+          mountPath: /var/www/moodledata
+        - name: config-volume
+          mountPath: /var/www/html/config.php
+          subPath: config.php
+        resources:
+          {{- toYaml .Values.moodle.resources | nindent 10 }}
+      volumes:
+      - name: moodledata-storage
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-moodledata-pvc
+      - name: config-volume
+        configMap:
+          name: {{ .Release.Name }}-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-web
+spec:
+  type: {{ .Values.moodle.service.type }}
+  selector:
+    app: moodle
+    component: web
+  ports:
+    - protocol: TCP
+      port: {{ .Values.moodle.service.port }}
+      targetPort: 80
+      {{- if eq .Values.moodle.service.type "NodePort" }}
+      nodePort: {{ .Values.moodle.service.nodePort }}
+      {{- end }}

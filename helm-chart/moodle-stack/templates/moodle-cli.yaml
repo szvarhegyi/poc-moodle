@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-cli
+spec:
+  replicas: 1 # KÖTELEZŐ: A cron duplikációk elkerüléséért
+  selector:
+    matchLabels:
+      app: moodle
+      component: cli
+  template:
+    metadata:
+      labels:
+        app: moodle
+        component: cli
+    spec:
+      containers:
+      - name: moodle-cron
+        image: "{{ .Values.moodle.image }}"
+        command:
+          - sh
+          - "-c"
+          - |
+            while true; do
+              php admin/cli/cron.php --keep-alive=300
+              sleep 60
+            done
+        env:
+        - name: PHP_MEMORY_LIMIT
+          value: "1024M"
+        volumeMounts:
+        - name: moodledata-storage
+          mountPath: /var/www/moodledata
+        - name: config-volume
+          mountPath: /var/www/html/config.php
+          subPath: config.php
+      volumes:
+      - name: moodledata-storage
+        persistentVolumeClaim:
+          claimName: {{ .Release.Name }}-moodledata-pvc
+      - name: config-volume
+        configMap:
+          name: {{ .Release.Name }}-config

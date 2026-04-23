@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-pgbouncer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: moodle
+      component: pgbouncer
+  template:
+    metadata:
+      labels:
+        app: moodle
+        component: pgbouncer
+    spec:
+      containers:
+      - name: pgbouncer
+        image: "{{ .Values.pgbouncer.image }}"
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRESQL_HOST
+          value: "{{ .Release.Name }}-db"
+        - name: POSTGRESQL_PORT
+          value: "5432"
+        - name: PGBOUNCER_DATABASE
+          value: "{{ .Values.postgres.dbName }}"
+        - name: POSTGRESQL_USERNAME
+          value: "{{ .Values.postgres.user }}"
+        - name: POSTGRESQL_PASSWORD
+          value: "{{ .Values.postgres.password }}"
+        - name: PGBOUNCER_POOL_MODE
+          value: "{{ .Values.pgbouncer.poolMode }}"
+        - name: PGBOUNCER_MAX_CLIENT_CONN
+          value: "{{ .Values.pgbouncer.maxClientConn }}"
+        - name: PGBOUNCER_DEFAULT_POOL_SIZE
+          value: "{{ .Values.pgbouncer.defaultPoolSize }}"
+        - name: PGBOUNCER_PORT
+          value: "5432"
+        - name: PGBOUNCER_AUTH_TYPE
+          value: "{{ .Values.pgbouncer.authType }}"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-pgbouncer
+spec:
+  selector:
+    app: moodle
+    component: pgbouncer
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432

@@ -341,3 +341,36 @@ spec:
         type: Utilization
         averageUtilization: 80 # Ha a memória töltődik túl, arra is reagál.
 ```
+
+## 7. Teljes K8s Környezet Telepítése Helm Chart segítségével
+
+A fenti példák egy strukturált, konfigurálható és "gyártásra kész" (production-ready) verziója elkészült a `helm-chart/moodle-stack` könyvtárban!
+Ez biztosítja a webes felületet, a CLI workert, opcionálisan a Postgres+PgBouncer-t, és a Redist. Vagyis egyetlen paranccsal el tudod helyi Docker Desktopon vagy a publikus felhőben indítani az egész projektet.
+
+### Előfeltétel: Metrics Server (Főként Docker Desktophoz)
+A horizontális skálázás (HPA) alappillére a **Metrics Server**, ami lekérdezi a konténerek terheltségét. A Docker Desktop beépített K8s platformja ezt alapértelmezetten *nem telepíti*. Ha nem teszed fel, a `kubectl get hpa` kimeneténél az `averageUtilization` értéke `<unknown>` fog maradni, és a Moodle nem fog felskálázódni.
+
+**Telepítése (1 perces folyamat):**
+1. Alkalmazd a legfrissebb hivatalos K8s Metrics Server komponenst:
+   ```bash
+   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+   ```
+2. Mivel a Docker Desktop helyi szerverén nem áll rendelkezésre érvényes TLS tanúsítvány (certificate), frissítsd a beállításokat, hogy figyelmen kívül hagyja a privát hitelesítési hibát:
+   ```bash
+   kubectl patch deployment metrics-server -n kube-system --type 'json' -p '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--kubelet-insecure-tls"}]'
+   ```
+A Metrics Server innentől automatikusan kiszolgálja az adatokat a felskálázáshoz!
+
+### Telepítés menete
+
+1. Navigálj a projekt gyökerébe, ahol a `helm-chart` mappa található.
+2. (*Opcionális*) Nézd át a `helm-chart/moodle-stack/values.yaml` fájlt, ahol megadhatod, hogy egyáltalán szükséged van-e az image által biztosított postgres-re és redis-re (kikapcsolható mindkettő az `enabled: false` beállításával). Ugyanitt találhatóak a memória korlátok és az Autoskálázás (autoscaling) minimum (3) és maximum replikaszámai is!
+3. Add ki a teljes install parancsot a helyi klaszterre:
+   ```bash
+   helm upgrade --install my-moodle ./helm-chart/moodle-stack
+   ```
+4. Ellenőrizd a podok állapotát (a boot folymat nagyjából 1-2 percet is igénybe vehet, míg a Postgres inicializálja magát):
+   ```bash
+   kubectl get pods -w
+   ```
+5. Amint a `my-moodle-web` és `my-moodle-cli` fut: a rendszer a `values.yaml` alapján kibocsátott egy **NodePortot** (alapértelmezetten `30080`). Nyisd meg a böngésződben a [http://localhost:30080](http://localhost:30080) címet, és megjelenik a Moodle!

@@ -1,0 +1,39 @@
+# Moodle Data PVC (Ideálisan RWX fájlrendszer lenne élesben, de teszthez RWO is jó)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-moodledata-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.moodleData.size }}
+---
+{{- if .Values.postgres.enabled }}
+# Postgres DB PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-db-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.database.size }}
+{{- end }}
+---
+{{- if .Values.redis.enabled }}
+# Redis Data PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-redis-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.redis.size }}
+{{- end }}

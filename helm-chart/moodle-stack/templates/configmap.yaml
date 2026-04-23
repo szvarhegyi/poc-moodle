@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-config
+data:
+  config.php: |
+    <?php
+    unset($CFG);
+    global $CFG;
+    $CFG = new stdClass();
+    $CFG->dbtype    = 'pgsql';
+    $CFG->dblibrary = 'native';
+    $CFG->dbhost    = '{{ .Release.Name }}-pgbouncer';
+    $CFG->dbname    = '{{ .Values.postgres.dbName }}';
+    $CFG->dbuser    = '{{ .Values.postgres.user }}';
+    $CFG->dbpass    = '{{ .Values.postgres.password }}';
+    $CFG->prefix    = 'mdl_';
+    $CFG->dboptions = array(
+        'dbpersist' => 0,
+        'dbport' => '5432',
+        'dbsocket' => '',
+    );
+    $CFG->wwwroot   = 'http://{{ .Values.moodle.domain }}';
+    $CFG->dataroot  = '/var/www/moodledata';
+    $CFG->admin     = 'admin';
+    # Redis Session Config
+    $CFG->session_handler_class = '\core\session\redis';
+    $CFG->session_redis_host = '{{ .Release.Name }}-redis';
+    require_once(__DIR__ . '/lib/setup.php');
